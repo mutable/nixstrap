@@ -1,0 +1,78 @@
+#! @execline@/bin/execlineb
+# Nixstrap init
+
+# Set up PATH
+export PATH @path@
+
+# Set up the basic mounts.
+foreground { mount -t devtmpfs devtmpfs /dev }
+foreground { mount -t proc none /proc }
+foreground { mount -t sysfs none /sys }
+
+# Load the kernel modules.
+foreground { redirfd -r 0 @modulesClosure@/insmod-list forstdin -d "\n" line importas -u line line insmod $line }
+
+# ensure we have efivarfs
+foreground { mount -t efivarfs efivarfs /sys/firmware/efi/efivars }
+
+foreground { echo "nixstrap loaded" }
+
+# Initialize DHCP
+if { dhclient eth0 }
+
+ifthenelse {
+  # Load the nixstrap config from instance metadata
+  pipeline { curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/nixstrap-system }
+  withstdinas system
+
+  pipeline { curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/nixstrap-keys }
+  withstdinas keys
+
+  pipeline { curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/nixstrap-substituters }
+  withstdinas substituters
+
+  # Format and mount the disk.
+  # First, if we have a 2nd partition left over, nuke it.
+  foreground { sgdisk -d2 /dev/sda }
+  if { sgdisk -e -N2 -c 2:nixos /dev/sda }
+  if { mke2fs -t ext4 -FF -L nixos /dev/sda2 }
+  if { mkdir /mnt }
+  if { mount /dev/sda2 /mnt }
+  if { mkdir /mnt/boot }
+  if { mount /dev/sda1 /mnt/boot }
+
+  # Install the NixOS system from the system
+  export NIX_SSL_CERT_FILE @cacert@/etc/ssl/certs/ca-bundle.crt
+  if {
+    multisubstitute {
+      importas -u system system
+      importas -u keys keys
+      importas -u substituters substituters
+    }
+
+    nix-env -vv --store "/mnt" --trusted-public-keys $keys --extra-substituters $substituters -p /mnt/nix/var/nix/profiles/system --set $system
+  }
+
+  # Trick NixOS into thinking this is a NixOS system.
+  if { mkdir -m 0755 -p /mnt/etc }
+  if { touch /mnt/etc/NIXOS }
+
+  # Install the bootloader.
+  export NIXOS_INSTALL_BOOTLOADER 1
+  if { ln -sfn /proc/mounts /mnt/etc/mtab }
+  if { @nixosenter@ --root /mnt -- /run/current-system/bin/switch-to-configuration boot }
+
+  # We are done here.
+  if { umount /mnt/boot }
+  umount /mnt
+} {
+  foreground { echo success }
+  foreground { curl -X PUT --data "success" http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/nixstrap/status -H "Metadata-Flavor: Google" }
+  redirfd -c 1 /proc/sysrq-trigger echo b
+} {
+  foreground { echo fail }
+  foreground { curl -X PUT --data "fail" http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/nixstrap/status -H "Metadata-Flavor: Google" }
+  foreground { sleep 60 }
+  foreground { redirfd -c 1 /proc/sysrq-trigger echo o }
+  sleep 30
+}

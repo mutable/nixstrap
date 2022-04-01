@@ -1,0 +1,26 @@
+= Nixstrap
+
+Nixstrap is a GCP image that is designed to be deployed as an initial
+bootstrap, to pull in a NixOS closure stored in a separate binary cache.
+This improves bringing up new GCP instances, bringing it closer to
+updating an existing system.
+
+== Metadata
+
+The information necessary for downloading the NixOS system closure is
+stored in instance metadata keys:
+
+ - `nixstrap-system`: the path of the NixOS closure, e.g.
+   `/nix/store/wj2y92z38gbkjdi68ipfbc5011hhlxj0-nixos-system-unnamed-20.09pre-git`
+
+ - `nixstrap-keys`: A list of Ed25519 keys (in `nix.conf` format) that
+   are to be trusted, e.g.
+   `cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=`
+
+ - `nixstrap-substituters`: A list of additional substituters that will
+   be queried for store paths, e.g. `https://cache.nixos.org/`
+
+Once the installation is done, a key is set in the guest attributes of
+the instance, in `nixstrap/status`. If `success`, the install succeeded
+and the VM is running the NixOS system. If `fail`, something went wrong
+and the serial logs can probably be queried to see what happened.
